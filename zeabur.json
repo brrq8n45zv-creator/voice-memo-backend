@@ -1,0 +1,8 @@
+{
+  "framework": "node",
+  "buildCommand": "npm install && npm start",
+  "startCommand": "npm start",
+  "env": {
+    "NODE_ENV": "production"
+  }
+}
