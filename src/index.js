@@ -9,6 +9,7 @@ const remindRoutes = require('./routes/remind');
 const uploadRoutes = require('./routes/upload');
 const categoryRoutes = require('./routes/category');
 const syncRoutes = require('./routes/sync');
+const { initDb } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -39,9 +40,20 @@ app.use((err, req, res, next) => {
     res.status(500).json({ code: 500, message: '服务器内部错误', error: err.message });
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-    console.log(`语音备忘录后端服务已启动，端口: ${PORT}`);
-    console.log(`访问地址: http://localhost:${PORT}`);
-});
+async function startServer() {
+    try {
+        await initDb();
+        console.log('数据库初始化完成');
+        app.listen(PORT, '0.0.0.0', () => {
+            console.log(`语音备忘录后端服务已启动，端口: ${PORT}`);
+            console.log(`访问地址: http://localhost:${PORT}`);
+        });
+    } catch (error) {
+        console.error('启动失败:', error);
+        process.exit(1);
+    }
+}
+
+startServer();
 
 module.exports = app;

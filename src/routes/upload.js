@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
-const { db } = require('../db');
+const { initDb, getOne } = require('../db');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'voice-memo-secret-key-2024';
@@ -72,8 +72,9 @@ router.post('/audio', authMiddleware, upload.single('audio'), (req, res) => {
     }
 });
 
-router.post('/audioBase64', authMiddleware, (req, res) => {
+router.post('/audioBase64', authMiddleware, async (req, res) => {
     try {
+        await initDb();
         const { audioData, filename, mimeType } = req.body;
         if (!audioData) {
             return res.json({ code: 400, message: '音频数据不能为空' });
@@ -119,8 +120,9 @@ router.get('/delete', authMiddleware, (req, res) => {
     }
 });
 
-router.get('/usage', authMiddleware, (req, res) => {
+router.get('/usage', authMiddleware, async (req, res) => {
     try {
+        await initDb();
         const userDir = path.join(__dirname, '..', 'uploads', req.userId.toString());
         let totalSize = 0;
         let fileCount = 0;
@@ -132,13 +134,13 @@ router.get('/usage', authMiddleware, (req, res) => {
                 fileCount++;
             });
         }
-        const memoCount = db.prepare('SELECT COUNT(*) as count FROM memos WHERE user_id = ? AND is_deleted = 0').get(req.userId).count;
+        const memoCount = getOne('SELECT COUNT(*) as count FROM memos WHERE user_id = ? AND is_deleted = 0', [req.userId]);
         res.json({
             code: 200,
             data: {
                 fileCount,
                 totalSize,
-                memoCount,
+                memoCount: memoCount ? memoCount.count : 0,
                 storageUsed: totalSize
             }
         });

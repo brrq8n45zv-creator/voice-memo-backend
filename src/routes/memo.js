@@ -1,6 +1,6 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const { db } = require('../db');
+const { initDb, getOne, getAll, runQuery, getLastInsertId } = require('../db');
 
 const router = express.Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'voice-memo-secret-key-2024';
@@ -21,8 +21,9 @@ function authMiddleware(req, res, next) {
 
 router.use(authMiddleware);
 
-router.get('/list', (req, res) => {
+router.get('/list', async (req, res) => {
     try {
+        await initDb();
         const { category_id, is_top, is_star, keyword, page = 1, pageSize = 50 } = req.query;
         let sql = 'SELECT * FROM memos WHERE user_id = ? AND is_deleted = 0';
         const params = [req.userId];
@@ -43,18 +44,19 @@ router.get('/list', (req, res) => {
         sql += ' ORDER BY is_top DESC, created_at DESC';
         const offset = (page - 1) * pageSize;
         sql += ` LIMIT ${parseInt(pageSize)} OFFSET ${offset}`;
-        const memos = db.prepare(sql).all(...params);
-        const total = db.prepare('SELECT COUNT(*) as count FROM memos WHERE user_id = ? AND is_deleted = 0').get(req.userId).count;
-        res.json({ code: 200, data: { list: memos, total } });
+        const memos = getAll(sql, params);
+        const total = getOne('SELECT COUNT(*) as count FROM memos WHERE user_id = ? AND is_deleted = 0', [req.userId]);
+        res.json({ code: 200, data: { list: memos, total: total ? total.count : 0 } });
     } catch (error) {
         console.error('获取备忘录列表错误:', error);
         res.json({ code: 500, message: '获取失败', error: error.message });
     }
 });
 
-router.get('/detail/:id', (req, res) => {
+router.get('/detail/:id', async (req, res) => {
     try {
-        const memo = db.prepare('SELECT * FROM memos WHERE id = ? AND user_id = ?').get(req.params.id, req.userId);
+        await initDb();
+        const memo = getOne('SELECT * FROM memos WHERE id = ? AND user_id = ?', [req.params.id, req.userId]);
         if (!memo) {
             return res.json({ code: 404, message: '备忘录不存在' });
         }
@@ -64,14 +66,16 @@ router.get('/detail/:id', (req, res) => {
     }
 });
 
-router.post('/create', (req, res) => {
+router.post('/create', async (req, res) => {
     try {
+        await initDb();
         const { title, content, audio_url, audio_duration, category_id, is_top, is_star } = req.body;
-        const result = db.prepare(`
+        runQuery(`
             INSERT INTO memos (user_id, title, content, audio_url, audio_duration, category_id, is_top, is_star)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(req.userId, title || '无标题', content || '', audio_url || '', audio_duration || 0, category_id || 0, is_top || 0, is_star || 0);
-        const newMemo = db.prepare('SELECT * FROM memos WHERE id = ?').get(result.lastInsertRowid);
+        `, [req.userId, title || '无标题', content || '', audio_url || '', audio_duration || 0, category_id || 0, is_top || 0, is_star || 0]);
+        const newId = getLastInsertId();
+        const newMemo = getOne('SELECT * FROM memos WHERE id = ?', [newId]);
         res.json({ code: 200, message: '创建成功', data: newMemo });
     } catch (error) {
         console.error('创建备忘录错误:', error);
@@ -79,18 +83,19 @@ router.post('/create', (req, res) => {
     }
 });
 
-router.post('/update/:id', (req, res) => {
+router.post('/update/:id', async (req, res) => {
     try {
+        await initDb();
         const { title, content, audio_url, audio_duration, category_id, is_top, is_star } = req.body;
-        const memo = db.prepare('SELECT * FROM memos WHERE id = ? AND user_id = ?').get(req.params.id, req.userId);
+        const memo = getOne('SELECT * FROM memos WHERE id = ? AND user_id = ?', [req.params.id, req.userId]);
         if (!memo) {
             return res.json({ code: 404, message: '备忘录不存在' });
         }
-        db.prepare(`
+        runQuery(`
             UPDATE memos SET title = ?, content = ?, audio_url = ?, audio_duration = ?,
             category_id = ?, is_top = ?, is_star = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ? AND user_id = ?
-        `).run(
+        `, [
             title ?? memo.title,
             content ?? memo.content,
             audio_url ?? memo.audio_url,
@@ -100,8 +105,8 @@ router.post('/update/:id', (req, res) => {
             is_star ?? memo.is_star,
             req.params.id,
             req.userId
-        );
-        const updatedMemo = db.prepare('SELECT * FROM memos WHERE id = ?').get(req.params.id);
+        ]);
+        const updatedMemo = getOne('SELECT * FROM memos WHERE id = ?', [req.params.id]);
         res.json({ code: 200, message: '更新成功', data: updatedMemo });
     } catch (error) {
         console.error('更新备忘录错误:', error);
@@ -109,76 +114,82 @@ router.post('/update/:id', (req, res) => {
     }
 });
 
-router.post('/delete/:id', (req, res) => {
+router.post('/delete/:id', async (req, res) => {
     try {
-        const result = db.prepare('UPDATE memos SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?').run(req.params.id, req.userId);
-        if (result.changes === 0) {
-            return res.json({ code: 404, message: '备忘录不存在' });
-        }
+        await initDb();
+        runQuery('UPDATE memos SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?', [req.params.id, req.userId]);
         res.json({ code: 200, message: '删除成功' });
     } catch (error) {
         res.json({ code: 500, message: '删除失败', error: error.message });
     }
 });
 
-router.post('/batchDelete', (req, res) => {
+router.post('/batchDelete', async (req, res) => {
     try {
+        await initDb();
         const { ids } = req.body;
         if (!ids || !Array.isArray(ids) || ids.length === 0) {
             return res.json({ code: 400, message: '请选择要删除的备忘录' });
         }
-        const placeholders = ids.map(() => '?').join(',');
-        db.prepare(`UPDATE memos SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders}) AND user_id = ?`).run(...ids, req.userId);
+        ids.forEach(id => {
+            runQuery('UPDATE memos SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?', [id, req.userId]);
+        });
         res.json({ code: 200, message: '批量删除成功' });
     } catch (error) {
         res.json({ code: 500, message: '批量删除失败', error: error.message });
     }
 });
 
-router.post('/batchTop', (req, res) => {
+router.post('/batchTop', async (req, res) => {
     try {
+        await initDb();
         const { ids, is_top } = req.body;
         if (!ids || !Array.isArray(ids)) {
             return res.json({ code: 400, message: '参数错误' });
         }
-        const placeholders = ids.map(() => '?').join(',');
-        db.prepare(`UPDATE memos SET is_top = ?, updated_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders}) AND user_id = ?`).run(is_top ? 1 : 0, ...ids, req.userId);
+        ids.forEach(id => {
+            runQuery('UPDATE memos SET is_top = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?', [is_top ? 1 : 0, id, req.userId]);
+        });
         res.json({ code: 200, message: '批量置顶成功' });
     } catch (error) {
         res.json({ code: 500, message: '操作失败', error: error.message });
     }
 });
 
-router.get('/trash', (req, res) => {
+router.get('/trash', async (req, res) => {
     try {
-        const memos = db.prepare('SELECT * FROM memos WHERE user_id = ? AND is_deleted = 1 ORDER BY deleted_at DESC').all(req.userId);
+        await initDb();
+        const memos = getAll('SELECT * FROM memos WHERE user_id = ? AND is_deleted = 1 ORDER BY deleted_at DESC', [req.userId]);
         res.json({ code: 200, data: memos });
     } catch (error) {
         res.json({ code: 500, message: '获取失败', error: error.message });
     }
 });
 
-router.post('/restore/:id', (req, res) => {
+router.post('/restore/:id', async (req, res) => {
     try {
-        db.prepare('UPDATE memos SET is_deleted = 0, deleted_at = NULL WHERE id = ? AND user_id = ?').run(req.params.id, req.userId);
+        await initDb();
+        runQuery('UPDATE memos SET is_deleted = 0, deleted_at = NULL WHERE id = ? AND user_id = ?', [req.params.id, req.userId]);
         res.json({ code: 200, message: '恢复成功' });
     } catch (error) {
         res.json({ code: 500, message: '恢复失败', error: error.message });
     }
 });
 
-router.post('/permanentDelete/:id', (req, res) => {
+router.post('/permanentDelete/:id', async (req, res) => {
     try {
-        db.prepare('DELETE FROM memos WHERE id = ? AND user_id = ?').run(req.params.id, req.userId);
+        await initDb();
+        runQuery('DELETE FROM memos WHERE id = ? AND user_id = ?', [req.params.id, req.userId]);
         res.json({ code: 200, message: '永久删除成功' });
     } catch (error) {
         res.json({ code: 500, message: '删除失败', error: error.message });
     }
 });
 
-router.post('/emptyTrash', (req, res) => {
+router.post('/emptyTrash', async (req, res) => {
     try {
-        db.prepare('DELETE FROM memos WHERE user_id = ? AND is_deleted = 1').run(req.userId);
+        await initDb();
+        runQuery('DELETE FROM memos WHERE user_id = ? AND is_deleted = 1', [req.userId]);
         res.json({ code: 200, message: '清空回收站成功' });
     } catch (error) {
         res.json({ code: 500, message: '清空失败', error: error.message });
