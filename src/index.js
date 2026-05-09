@@ -11,7 +11,7 @@ const categoryRoutes = require('./routes/category');
 const syncRoutes = require('./routes/sync');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
